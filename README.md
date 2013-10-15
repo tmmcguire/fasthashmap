@@ -4,6 +4,15 @@ fashhashmap
 Rust hashmap based on a faster hash function and Python dictionaries
 
 
+WARNING
+-------
+
+The hash function used by this map is not cryptographically
+strong. This map is open to
+[denial of service attacks](http://events.ccc.de/congress/2011/Fahrplan/events/4680.en.html).
+
+CAUTION IS ADVISED.
+
 HashMap Use
 -----------
 
