@@ -350,8 +350,26 @@ mod tests {
     }
 
     #[bench]
+    fn hashmap_bench_stdlib(b: &mut extra::test::BenchHarness) {
+        let list = ["abashed", "acrid", "dachshund's", "hackle", "zigzagging"];
+        do b.iter {
+            let mut m = std::hashmap::HashMap::new();
+            for w in list.iter() { m.insert(w, 27); }
+        }
+    }
+
+    #[bench]
     fn hash_bench_djbhash(b: &mut extra::test::BenchHarness) {
         let s = "abcdefghijklmnopqrstuvwxyz";
         do b.iter { DJBState::djbhash(&s); }
+    }
+
+    #[bench]
+    fn hashmap_bench_fasthashmap(b: &mut extra::test::BenchHarness) {
+        let list = ["abashed", "acrid", "dachshund's", "hackle", "zigzagging"];
+        do b.iter {
+            let mut m = HashMap::new();
+            for w in list.iter() { m.insert(w, 27); }
+        }
     }
 }
