@@ -40,22 +40,10 @@ impl Writer for DJBState {
     fn write(&mut self, buf : &[u8]) {
         let len = buf.len();
         let mut i = 0;
-        while i < len { self.hash = (33u64 * self.hash) ^ buf[i] as u64; i += 1; }           /* 3.1s */
-        // for i in range(0, len) { self.hash = (33u64 * self.hash) ^ buf[i] as u64 }        /* 3.6s */
-        // for i in range(0, buf.len()) { self.hash = (33u64 * self.hash) ^ buf[i] as u64 }  /* 3.6s */
-        // for byte in buf.iter() { self.hash = (33u64 * self.hash) ^ *byte as u64 }         /* 3.8s */
+        while i < len { self.hash = (33u64 * self.hash) ^ buf[i] as u64; i += 1; }
     }
     fn flush(&mut self) { }
 }
-
-/* Original hash function */
-// fn djbhash(bytes : &[u8]) -> u64 {
-//     let mut hash = 5381u64;
-//     for byte in bytes.iter() {
-//             hash = (33u64 * hash) ^ *byte as u64;
-//     }
-//     return hash;
-// }
 
 /* ----------------------------------------------- */
 
@@ -98,7 +86,6 @@ pub struct HashMap<K,V> {
     mask       : u64,
     length     : uint,
     ghosts     : uint,
-//    collisions : uint,
 }
 
 impl<K : Eq + IterBytes,V> HashMap<K,V> {
@@ -112,12 +99,10 @@ impl<K : Eq + IterBytes,V> HashMap<K,V> {
             mask : (capacity as u64) - 1,
             length : 0,
             ghosts : 0,
-//            collisions : 0,
         }
     }
 
     pub fn capacity(&self) -> uint { self.capacity }
-//     pub fn collisions(&self) -> uint { self.collisions }
 
     // This algorithm gleefully stolen from Python
     #[inline]
@@ -136,24 +121,6 @@ impl<K : Eq + IterBytes,V> HashMap<K,V> {
             free.unwrap() as uint
         }
     }
-
-    // #[inline]
-    // fn probe_mut(&mut self, key : &K) -> uint {
-    //     let mut hash = DJBState::djbhash(key);
-    //     let mut free = None;
-    //     let mut i = hash & self.mask;
-    //     while !self.table[i].matches(key) {
-    //         self.collisions += 1;
-    //         if free.is_none() && self.table[i].is_ghost() { free = Some(i); }
-    //         i = ((5 * i) + 1 + hash) & self.mask;
-    //         hash = hash >> PERTURB_SHIFT;
-    //     }
-    //     if self.table[i].is_full() || free.is_none() {
-    //         i as uint
-    //     } else {
-    //         free.unwrap() as uint
-    //     }
-    // }
 
     #[inline]
     fn do_expand(&mut self, new_capacity : uint) {
@@ -217,7 +184,6 @@ impl<K : Eq + IterBytes,V> MutableMap<K,V> for HashMap<K,V> {
     fn swap(&mut self, key: K, value: V) -> Option<V> {
         self.expand();
         let i = self.probe(&key);
-//        let i = self.probe_mut(&key);
         match self.table[i] {
             Empty => {
                 self.table[i] = Full(key,value);
