@@ -6,10 +6,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[ link(name = "fashhashmap", vers="1.0") ];
+#[ crate_id = "fasthashmap#1.1" ];
 #[ crate_type = "lib" ];
 
-use std::rt::io::Writer;
+use std::io::Writer;
 use std::to_bytes::IterBytes;
 use std::vec;
 use std::uint;
@@ -67,9 +67,10 @@ enum Entry<K,V> {
 }
 
 impl<K : Eq, V> Entry<K,V> {
-    fn is_empty(&self) -> bool { match *self { Empty => true, _ => false } }
-    fn is_full(&self)  -> bool { match *self { Full(*) => true, _ => false } }
-    fn is_ghost(&self) -> bool { match *self { Ghost(*) => true, _ => false } }
+    #[allow(dead_code)]
+    fn is_empty(&self) -> bool { match *self { Empty => true,    _ => false } }
+    fn is_full(&self)  -> bool { match *self { Full(..) => true,  _ => false } }
+    fn is_ghost(&self) -> bool { match *self { Ghost(..) => true, _ => false } }
 
     #[inline]
     fn matches(&self, key : &K) -> bool {
@@ -107,13 +108,13 @@ impl<K : Eq + IterBytes,V> HashMap<K,V> {
     // This algorithm gleefully stolen from Python
     #[inline]
     fn probe(&self, key : &K) -> uint {
-        let mut hash = DJBState::djbhash(key);
+        let mut shifted_hash = DJBState::djbhash(key);
         let mut free = None;
-        let mut i = hash & self.mask;
+        let mut i = shifted_hash & self.mask;
         while !self.table[i].matches(key) {
             if free.is_none() && self.table[i].is_ghost() { free = Some(i); }
-            i = ((5 * i) + 1 + hash) & self.mask;
-            hash = hash >> PERTURB_SHIFT;
+            i = ((5 * i) + 1 + shifted_hash) & self.mask;
+            shifted_hash = shifted_hash >> PERTURB_SHIFT;
         }
         if self.table[i].is_full() || free.is_none() {
             i as uint
@@ -221,7 +222,7 @@ impl<K : Eq + IterBytes,V> MutableMap<K,V> for HashMap<K,V> {
     fn find_mut<'a>(&'a mut self, key: &K) -> Option<&'a mut V> {
         let i = self.probe(key);
         match self.table[i] {
-            Empty | Ghost(_)  => None,
+            Empty | Ghost(_)    => None,
             Full(_,ref mut val) => Some(val),
         }
     }
@@ -235,8 +236,7 @@ pub struct HashSet<T> {
 
 impl<T : Eq + IterBytes> HashSet<T> {
     pub fn new() -> HashSet<T> { HashSet { map : HashMap::new() } }
-}
-    
+}    
 
 impl<T> Container for HashSet<T> {
     fn len(&self) -> uint { self.map.len() }
@@ -252,10 +252,8 @@ impl<T : Eq + IterBytes> Set<T> for HashSet<T> {
     fn is_disjoint(&self, other : &HashSet<T>) -> bool {
         for elt in self.map.table.iter() {
             match *elt {
-                Full(ref k,_) => {
-                    if other.contains(k) { return false; }
-                },
-                _ => { },
+                Full(ref k,_) => { if other.contains(k) { return false; } },
+                _             => { },
             }
         }
         return true;
@@ -264,30 +262,20 @@ impl<T : Eq + IterBytes> Set<T> for HashSet<T> {
     fn is_subset(&self, other : &HashSet<T>) -> bool {
         for elt in self.map.table.iter() {
             match *elt {
-                Full(ref k,_) => {
-                    if !other.contains(k) { return false; }
-                },
-                _ => { },
+                Full(ref k,_) => { if !other.contains(k) { return false; } },
+                _             => { },
             }
         }
         return true;
     }
 
-    fn is_superset(&self, other : &HashSet<T>) -> bool {
-        other.is_subset(self)
-    }
+    fn is_superset(&self, other : &HashSet<T>) -> bool { other.is_subset(self) }
 }
 
 impl<T : Eq + IterBytes> MutableSet<T> for HashSet<T> {
-    fn insert(&mut self, value: T) -> bool {
-        self.map.insert(value,())
-    }
-
-    fn remove(&mut self, value: &T) -> bool {
-        self.map.remove(value)
-    }
+    fn insert(&mut self, value: T)  -> bool { self.map.insert(value,()) }
+    fn remove(&mut self, value: &T) -> bool { self.map.remove(value) }
 }
-
 
 /* ----------------------------------------------- */
 
@@ -295,7 +283,15 @@ impl<T : Eq + IterBytes> MutableSet<T> for HashSet<T> {
 mod tests {
     extern mod extra;
 
-    use super::*;
+    use std;
+    use std::io::buffered::BufferedReader;
+    use super::{DJBState,HashMap};
+
+    fn get_words() -> ~[~str] {
+        let path = std::path::Path::new("/usr/share/dict/words");
+        let mut bufferedFile = BufferedReader::new( std::io::File::open(&path) );
+        bufferedFile.lines().collect()
+    }
 
     #[test]
     fn test_empty() {
@@ -346,30 +342,49 @@ mod tests {
     #[bench]
     fn hash_bench_siphash(b: &mut extra::test::BenchHarness) {
         let s = "abcdefghijklmnopqrstuvwxyz";
-        do b.iter { s.hash(); }
+        b.iter( || { s.hash(); } );
     }
 
     #[bench]
     fn hashmap_bench_stdlib(b: &mut extra::test::BenchHarness) {
         let list = ["abashed", "acrid", "dachshund's", "hackle", "zigzagging"];
-        do b.iter {
+        b.iter( || {
             let mut m = std::hashmap::HashMap::new();
             for w in list.iter() { m.insert(w, 27); }
-        }
+        } );
     }
 
     #[bench]
     fn hash_bench_djbhash(b: &mut extra::test::BenchHarness) {
         let s = "abcdefghijklmnopqrstuvwxyz";
-        do b.iter { DJBState::djbhash(&s); }
+        b.iter( || { DJBState::djbhash(&s); } );
     }
 
     #[bench]
     fn hashmap_bench_fasthashmap(b: &mut extra::test::BenchHarness) {
         let list = ["abashed", "acrid", "dachshund's", "hackle", "zigzagging"];
-        do b.iter {
+        b.iter( || {
             let mut m = HashMap::new();
             for w in list.iter() { m.insert(w, 27); }
-        }
+        } );
     }
+
+    #[bench]
+    fn big_hashmap_bench_fasthashmap(b: &mut extra::test::BenchHarness) {
+        let words = get_words();
+        b.iter( || {
+            let mut m = HashMap::new(); // with_capacity(2 * words.len());
+            for w in words.iter() { m.insert(w, 27); }
+        } );
+    }
+
+    #[bench]
+    fn big_hashmap_bench_siphashmap(b: &mut extra::test::BenchHarness) {
+        let words = get_words();
+        b.iter( || {
+            let mut m = std::hashmap::HashMap::new(); // with_capacity(2 * words.len());
+            for w in words.iter() { m.insert(w, 27); }
+        } );
+    }
+
 }
