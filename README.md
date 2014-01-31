@@ -1,4 +1,4 @@
-fashhashmap
+fasthashmap
 ===========
 
 Rust hashmap based on a faster hash function and Python dictionaries
@@ -93,3 +93,7 @@ For more information on them, see
 
 * [Pure Python Dictionary Implementation](http://pybites.blogspot.com/2008/10/pure-python-dictionary-implementation.html)
 
+Name
+----
+
+Yes, I had to change the repo name from 'fashhashmap'. This is because I can neither type nor see, apparently. Sorry.
