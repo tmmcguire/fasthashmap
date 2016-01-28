@@ -1,7 +1,7 @@
 fasthashmap
 ===========
 
-Rust hashmap based on a faster hash function and Python dictionaries
+Rust hashmap based on a faster hash function and Python dictionaries.
 
 
 WARNING
@@ -16,13 +16,8 @@ CAUTION IS ADVISED.
 HashMap Use
 -----------
 
-The implementation in this module currently supports the
-[Container](http://static.rust-lang.org/doc/0.8/std/container/trait.Container.html),
-[Mutable](http://static.rust-lang.org/doc/0.8/std/container/trait.Mutable.html),
-[Map](http://static.rust-lang.org/doc/0.8/std/container/trait.Map.html),
-and
-[MutableMap](http://static.rust-lang.org/doc/0.8/std/container/trait.MutableMap.html)
-traits.
+The implementation in this module currently supports many of the same methods as
+std::collections::HashMap, but not all.
 
 ### Constructing a HashMap ###
 
@@ -39,13 +34,8 @@ Constructs a map with a capacity of at least 30.
 HashSet Use
 -----------
 
-The implementation in this module currently supports the
-[Container](http://static.rust-lang.org/doc/0.8/std/container/trait.Container.html),
-[Mutable](http://static.rust-lang.org/doc/0.8/std/container/trait.Mutable.html),
-[Set](http://static.rust-lang.org/doc/0.8/std/container/trait.Set.html),
-and
-[MutableSet](http://static.rust-lang.org/doc/0.8/std/container/trait.MutableSet.html)
-traits.
+The implementation in this module currently supports many of the same methods as
+std::collections::HashSet, but not all.
 
 ### Constructing a HashSet ###
 
@@ -77,9 +67,15 @@ http://www.cse.yorku.ca/~oz/hash.html.
 Hashtable
 ---------
 
-The hashtable code is loosely based on Python's dictionaries.
+The hashtable code is loosely based on Python's dictionaries. Since the HashMap
+implementation in the Rust standard library has been updated to be Robin Hood
+Hashing (i.e. bucket stealing), this implementation may not be faster than the
+standard libraries', although using the DJB2 hash function makes it likely.
 
-For more information on them, see
+It should be possible to mix-n-match hashing function implementations, though,
+so it might be worth experimenting further. Soon.
+
+For more information on this implementation, see
 
 * [dictobject.c](http://hg.python.org/cpython/file/tip/Objects/dictobject.c)
 
@@ -92,6 +88,13 @@ For more information on them, see
 * [Python dictionary implementation](http://www.laurentluce.com/posts/python-dictionary-implementation/)
 
 * [Pure Python Dictionary Implementation](http://pybites.blogspot.com/2008/10/pure-python-dictionary-implementation.html)
+
+For information on Robin Hood hashing, see the papers/articles mentioned in the
+Rust docs:
+
+* Pedro Celis. ["Robin Hood Hashing"](https://cs.uwaterloo.ca/research/tr/1986/CS-86-14.pdf).
+* Emmanuel Goossaert. ["Robin Hood hashing"](http://codecapsule.com/2013/11/11/robin-hood-hashing/).
+* Emmanuel Goossaert. ["Robin Hood hashing: backward shift deletion"](http://codecapsule.com/2013/11/17/robin-hood-hashing-backward-shift-deletion/).
 
 Name
 ----

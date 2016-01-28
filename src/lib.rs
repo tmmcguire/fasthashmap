@@ -6,54 +6,39 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[ crate_id = "fasthashmap#1.1" ];
-#[ crate_type = "lib" ];
+use std::borrow::Borrow;
+use std::hash::{Hasher,Hash};
+use std::slice::Iter;
 
-use std::io::Writer;
-use std::to_bytes::IterBytes;
-use std::vec;
-use std::uint;
-use std::util;
-
-// Simple Writer/IterBytes based implementation of the DJB hash
+// Simple implementation of the DJB hash
 // (See http://cr.yp.to/cdb/cdb.txt and http://www.cse.yorku.ca/~oz/hash.html)
-struct DJBState {
-    hash : u64
+pub struct DJBHasher {
+    hash: u64
 }
 
-impl DJBState {
+impl DJBHasher {
     #[inline]
-    fn new() -> DJBState { DJBState { hash : 5381u64 } }
-
-    #[inline]
-    fn djbhash<T:IterBytes>(t : &T) -> u64 {
-        let mut state = DJBState::new();
-        t.iter_bytes(true, |b| { state.write(b); true });
-        state.flush();
-        return state.hash();
+    pub fn new() -> DJBHasher {
+        DJBHasher { hash: 5381u64 }
     }
-
-    #[inline]
-    fn hash(&self) -> u64 { self.hash }
 }
 
-impl Writer for DJBState {
-    #[inline]
-    fn write(&mut self, buf : &[u8]) {
-        let len = buf.len();
-        let mut i = 0;
-        while i < len { self.hash = (33u64 * self.hash) ^ buf[i] as u64; i += 1; }
+impl Hasher for DJBHasher {
+    fn finish(&self) -> u64 {
+        self.hash
     }
 
-    #[inline]
-    fn flush(&mut self) { }
+    fn write(&mut self, bytes: &[u8]) {
+        for i in 0..bytes.len() {
+            self.hash = (33u64 * self.hash) ^ bytes[i] as u64
+        }
+    }
 }
 
 /* ----------------------------------------------- */
 
-// This is an implementation of the Container, Mutable, Map, and
-// MutableMap traits based on the DJB hash and Python's dictionaries.
-// See:
+// This is an implementation of a Rust HashMap based on the DJB hash and
+// Python's dictionaries. See:
 //
 // * http://stackoverflow.com/questions/327311/how-are-pythons-built-in-dictionaries-implemented
 //   (especially the links in the first answer),
@@ -62,116 +47,167 @@ impl Writer for DJBState {
 //
 // * http://pybites.blogspot.com/2008/10/pure-python-dictionary-implementation.html
 
-static PERTURB_SHIFT : uint = 5;
+static PERTURB_SHIFT: usize = 5;
 
-enum Entry<K,V> {
+#[derive(Clone)]
+pub enum Entry<K,V> {
     Empty,                      // This slot is empty
     Full(K,V,u64),              // This slot is holding a key and value
     Ghost(K,u64),               // This slot once held key k
 }
 
 impl<K, V> Entry<K,V> {
-    #[allow(dead_code)] #[inline]
-    fn is_empty(&self) -> bool { match *self { Empty => true,     _ => false } }
-
     #[inline]
-    fn is_full(&self)  -> bool { match *self { Full(..) => true,  _ => false } }
-
-    #[inline]
-    fn is_ghost(&self) -> bool { match *self { Ghost(..) => true, _ => false } }
-
-    #[inline]
-    fn matches_equiv<Q : Equiv<K>>(&self, key : &Q, hash : u64) -> bool {
+    #[allow(dead_code)]         // For completeness; this fn isn't used here
+    pub fn is_empty(&self) -> bool {
         match *self {
-            Empty                        => true,
-            Full(ref k, _, h)            => hash == h && key.equiv(k),
-            Ghost(ref k, h)              => hash == h && key.equiv(k),
+            Entry::Empty => true,
+            _ => false
         }
     }
-}
 
-impl <K : Eq, V> Entry<K,V> {
     #[inline]
-    fn matches(&self, key : &K, hash : u64) -> bool {
+    pub fn is_full(&self)  -> bool {
         match *self {
-            Empty                        => true,
-            Full(ref k,_,h)              => hash == h && k == key,
-            Ghost(ref k,h)               => hash == h && k == key,
+            Entry::Full(..) => true,
+            _ => false
+        }
+    }
+
+    #[inline]
+    pub fn is_ghost(&self) -> bool {
+        match *self {
+            Entry::Ghost(..) => true,
+            _ => false
+        }
+    }
+
+    #[inline]
+    pub fn matches<Q: PartialEq<K>>(&self, key: &Q, hash: u64) -> bool {
+        match *self {
+            Entry::Empty                                      => true,
+            Entry::Full(ref k, _, h) | Entry::Ghost(ref k, h) => hash == h && key == k,
+        }
+    }
+
+    #[inline]
+    pub fn key(&self) -> Option<&K> {
+        match *self {
+            Entry::Full(ref k,_,_) => Some(k),
+            _ => None
+        }
+    }
+
+    #[inline]
+    pub fn value<'l>(&'l self) -> Option<&'l V> {
+        match *self {
+            Entry::Full(_,ref v,_) => Some(v),
+            _ => None
         }
     }
 }
 
 pub struct HashMap<K,V> {
-    table      : ~[Entry<K,V>],
-    capacity   : uint,
-    mask       : u64,
-    length     : uint,
-    ghosts     : uint,
+    table     : Vec<Entry<K,V>>,
+    capacity  : usize,
+    mask      : u64,
+    length    : usize,
+    ghosts    : usize,
 }
 
-impl<K : Eq + IterBytes,V> HashMap<K,V> {
-    #[inline]
-    pub fn new() -> HashMap<K,V> { HashMap::with_capacity(8) }
+impl<K,V> HashMap<K,V> where K: Hash + Eq {
 
     #[inline]
-    pub fn with_capacity(sz : uint) -> HashMap<K,V> {
-        let capacity = uint::next_power_of_two(sz);
+    pub fn new() -> HashMap<K,V> {
+        HashMap::with_capacity(8)
+    }
+
+    #[inline]
+    pub fn with_capacity(sz: usize) -> HashMap<K,V> {
+        let capacity = usize::next_power_of_two(sz);
+        let mut table = Vec::with_capacity(capacity);
+        for _ in 0..capacity { table.push(Entry::Empty); }
         HashMap {
-            table : vec::from_fn(capacity, |_| Empty),
-            capacity : capacity,
-            mask : (capacity as u64) - 1,
-            length : 0,
-            ghosts : 0,
+            table   : table,
+            capacity: capacity,
+            mask    : (capacity as u64) - 1,
+            length  : 0,
+            ghosts  : 0,
         }
     }
 
     #[inline]
-    pub fn capacity(&self) -> uint { self.capacity }
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
 
     // This algorithm gleefully stolen from Python
     #[inline]
-    fn probe(&self, key : &K, hash : u64) -> uint {
+    fn probe(&self, key: &K, hash: u64) -> usize {
         let mut shifted_hash = hash;
         let mut free         = None;
-        let mut i            = shifted_hash & self.mask;
-        while !self.table[i].matches(key, hash) {
+        let mut i            = (shifted_hash & self.mask) as usize;
+        while !self.table[i].matches(key,hash) {
             if free.is_none() && self.table[i].is_ghost() { free = Some(i); }
-            i = ((5 * i) + 1 + shifted_hash) & self.mask;
+            i = (((5 * i as u64) + 1 + shifted_hash) & self.mask) as usize;
             shifted_hash = shifted_hash >> PERTURB_SHIFT;
         }
         if self.table[i].is_full() || free.is_none() {
-            i as uint
+            i
         } else {
-            free.unwrap() as uint
+            free.unwrap()
         }
     }
 
     #[inline]
-    fn probe_equiv<Q:IterBytes + Equiv<K>>(&self, key : &Q, hash : u64) -> uint {
+    fn probe_equiv<Q:PartialEq<K>>(&self, key: &Q, hash: u64) -> usize {
         let mut shifted_hash = hash;
         let mut free         = None;
-        let mut i            = shifted_hash & self.mask;
-        while !self.table[i].matches_equiv(key, hash) {
+        let mut i            = (shifted_hash & self.mask) as usize;
+        while !self.table[i].matches(key,hash) {
             if free.is_none() && self.table[i].is_ghost() { free = Some(i); }
-            i = ((5 * i) + 1 + shifted_hash) & self.mask;
+            i = (((5 * i as u64) + 1 + shifted_hash) & self.mask) as usize;
             shifted_hash = shifted_hash >> PERTURB_SHIFT;
         }
         if self.table[i].is_full() || free.is_none() {
-            i as uint
+            i
         } else {
-            free.unwrap() as uint
+            free.unwrap()
+        }
+    }
+
+    // Precondition: this is used by expand, so there must be enough space in the table.
+    #[inline]
+    fn swap_with_hash(&mut self, key: K, hash: u64, value: V) -> Option<V> {
+        let i = self.probe(&key, hash);
+        let mut elt = &mut self.table[i];
+        match elt {
+            &mut Entry::Empty => {
+                let f = Entry::Full(key,value,hash);
+                std::mem::replace(elt, f);
+                self.length += 1;
+                None
+            },
+            &mut Entry::Ghost(..) => {
+                let f = Entry::Full(key,value,hash);
+                std::mem::replace(elt, f);
+                self.length += 1;
+                self.ghosts -= 1;
+                None
+            },
+            &mut Entry::Full(_,ref mut v, _) => {
+                Some( std::mem::replace(v, value) )
+            },
         }
     }
 
     #[inline]
-    fn do_expand(&mut self, new_capacity : uint) {
+    fn do_expand(&mut self, new_capacity: usize) {
         let mut new_tbl = HashMap::with_capacity( new_capacity );
-        for elt in self.table.mut_iter() {
-            match util::replace(elt, Empty) {
-                Empty | Ghost(..) => { },
-                Full(k,v,h)    => {
-                    new_tbl.swap_with_hash(k, h, v);
-                },
+        for i in 0..self.table.len() {
+            match std::mem::replace(&mut self.table[i], Entry::Empty) {
+                Entry::Full(k,v,h)               => { new_tbl.swap_with_hash(k,h,v); }
+                Entry::Empty | Entry::Ghost(..)  => { }
             }
         }
         // Copy new table's elements into self.  Note: attempting
@@ -190,230 +226,203 @@ impl<K : Eq + IterBytes,V> HashMap<K,V> {
 
     #[inline]
     fn expand(&mut self) {
-        if self.length * 3 > self.capacity * 2 {
+        let capacity = self.capacity;
+        if self.length * 3 > capacity * 2 {
             // Expand table if live entries nearing capacity
-            self.do_expand( self.capacity * 2 );
-        } else if (self.length + self.ghosts) * 3 >= self.capacity * 2 {
+            self.do_expand( capacity * 2 );
+        } else if (self.length + self.ghosts) * 3 >= capacity * 2 {
             // Rehash to flush out excess ghosts
-            self.do_expand( self.capacity );
-        }
-    }
-
-    // Precondition: this is used by expand, so there must be enough space in the table.
-    #[inline]
-    fn swap_with_hash(&mut self, key: K, hash : u64, value: V) -> Option<V> {
-        let i = self.probe(&key, hash);
-        match self.table[i] {
-            Empty => {
-                self.table[i] = Full(key,value,hash);
-                self.length += 1;
-                None
-            },
-            Ghost(..) => {
-                self.table[i] = Full(key,value,hash);
-                self.length += 1;
-                self.ghosts -= 1;
-                None
-            },
-            Full(_,ref mut v, _) => {
-                Some( util::replace(v, value) )
-            },
+            self.do_expand( capacity );
         }
     }
 
     #[inline]
-    pub fn find_equiv<'a, Q:IterBytes + Equiv<K>>(&'a self, k: &Q) -> Option<&'a V> {
-        let i = self.probe_equiv(k, DJBState::djbhash(k));
-        match self.table[i] {
-            Empty | Ghost(..)   => None,
-            Full(_, ref val, _) => Some(val),
+    pub fn find_equiv<'a, Q>(&'a self, k: &Q) -> Option<&'a V> where Q: Hash + PartialEq<K> {
+        let mut hasher = DJBHasher::new();
+        k.hash(&mut hasher);
+        let hash = hasher.finish();
+        let i = self.probe_equiv(k, hash);
+        match &self.table[i] {
+            &Entry::Empty | &Entry::Ghost(..) => None,
+            &Entry::Full(_, ref val, _)       => Some(val),
         }
     }
 
     #[inline]
-    pub fn iter<'a>(&'a self) -> HashMapIterator<'a, K, V> {
-        HashMapIterator { iterator : self.table.iter() }
+    pub fn len(&self) -> usize {
+        self.length
     }
-}
 
-impl<K,V> Container for HashMap<K,V> {
     #[inline]
-    fn len(&self) -> uint { self.length }
-}
-
-impl<K,V> Mutable for HashMap<K,V> {
-    #[inline]
-    fn clear(&mut self) { 
-        for elt in self.table.mut_iter() { *elt = Empty; }
+    pub fn clear(&mut self) {
+        for i in 0..self.table.len() {
+            self.table[i] = Entry::Empty;
+        }
         self.length = 0;
         self.ghosts = 0;
     }
-}
 
-impl<K : Eq + IterBytes,V> Map<K,V> for HashMap<K,V> {
-    #[inline]
-    fn find<'a>(&'a self, key: &K) -> Option<&'a V> {
-        let i = self.probe(key, DJBState::djbhash(key));
-        match self.table[i] {
-            Empty | Ghost(..)   => None,
-            Full(_, ref val, _) => Some(val),
+    pub fn insert(&mut self, k: K, v: V) -> Option<V> {
+        self.expand();
+        let mut hasher = DJBHasher::new();
+        k.hash(&mut hasher);
+        let hash = hasher.finish();
+        self.swap_with_hash(k, hash, v)
+    }
+
+    pub fn get<Q>(&self, k: &Q) -> Option<&V> where K: Borrow<Q>, Q: Hash + PartialEq<K> {
+        self.find_equiv(k)
+    }
+
+    pub fn get_mut<Q>(&mut self, k: &Q) -> Option<&mut V> where K: Borrow<Q>, Q: Hash + PartialEq<K> {
+        let mut hasher = DJBHasher::new();
+        k.hash(&mut hasher);
+        let hash = hasher.finish();
+        let i = self.probe_equiv(k, hash);
+        let mut elt = &mut self.table[i];
+        match elt {
+            &mut Entry::Empty | &mut Entry::Ghost(..) => None,
+            &mut Entry::Full(_,ref mut v, _) => Some(v),
         }
     }
-}
 
-impl<K : Eq + IterBytes,V> MutableMap<K,V> for HashMap<K,V> {
-
-    #[inline]
-    fn swap(&mut self, key: K, value: V) -> Option<V> {
-        self.expand();
-        let hash = DJBState::djbhash(&key);
-        self.swap_with_hash(key, hash, value)
+    fn contains_key<Q>(&self, k: &Q) -> bool where K: Borrow<Q>, Q: Hash + PartialEq<K> {
+        self.get(k).is_some()
     }
 
-    #[inline]
-    fn pop(&mut self, key: &K) -> Option<V> {
-        self.expand();
-        let i = self.probe(key, DJBState::djbhash(key));
-        let (result,replacement) = match util::replace(&mut self.table[i], Empty) {
-            Empty       => (None,Empty),
-            Ghost(k,h)  => (None,Ghost(k,h)),
-            Full(k,v,h) => {
-                self.length -= 1;
-                self.ghosts += 1;
-                (Some(v),Ghost(k,h))
-            },
-        };
-        self.table[i] = replacement;
-        result
+    pub fn iter(&self) -> HashMapIter<K,V> {
+        HashMapIter { inner: self.table.iter() }
     }
 
-    #[inline]
-    fn find_mut<'a>(&'a mut self, key: &K) -> Option<&'a mut V> {
-        let i = self.probe(key, DJBState::djbhash(key));
-        match self.table[i] {
-            Empty | Ghost(..)     => None,
-            Full(_,ref mut val,_) => Some(val),
-        }
+    pub fn keys(&self) -> HashMapKeys<K,V> {
+        HashMapKeys { inner: self.iter() }
     }
 }
 
-pub struct HashMapIterator<'a,K,V> {
-    priv iterator : vec::VecIterator<'a,Entry<K,V>>,
+// ----------------------------------------
+
+pub struct HashMapIter<'l,K: 'l,V: 'l> {
+    inner: Iter<'l,Entry<K,V>>,
 }
 
-impl<'a,K,V> Iterator<(&'a K, &'a V)> for HashMapIterator<'a,K,V> {
-    #[inline]
-    fn next(&mut self) -> Option<(&'a K, &'a V)> {
-        for elt in self.iterator {
-            match *elt {
-                Empty | Ghost(..)        => { },
-                Full(ref key, ref val,_) => { return Some((key, val)) },
+impl<'l,K,V> Iterator for HashMapIter<'l,K,V> {
+    type Item = (&'l K, &'l V);
+    fn next(&mut self) -> Option<(&'l K, &'l V)> {
+        let mut n = self.inner.next();
+        loop {
+            match n {
+                Some(entry) if entry.is_full() => {
+                    return Some((entry.key().unwrap(), entry.value().unwrap()))
+                }
+                Some(..) => {
+                    n = self.inner.next();
+                }
+                None => {
+                    return None;
+                }
             }
         }
-        return None;
+    }
+}
+
+pub struct HashMapKeys<'l,K: 'l,V: 'l> {
+    inner: HashMapIter<'l,K,V>,
+}
+
+impl<'l,K,V> Iterator for HashMapKeys<'l,K,V> {
+    type Item = &'l K;
+    fn next(&mut self) -> Option<&'l K> {
+        match self.inner.next() {
+            Some((ref k, _)) => Some(k),
+            None => None
+        }
     }
 }
 
 /* ----------------------------------------------- */
 
 pub struct HashSet<T> {
-    priv map : HashMap<T,()>
+    map: HashMap<T,()>
 }
 
-impl<T : Eq + IterBytes> HashSet<T> {
-    #[inline]
-    pub fn new() -> HashSet<T> { HashSet { map : HashMap::new() } }
+impl<T> HashSet<T> where T: Hash + Eq {
 
     #[inline]
-    pub fn iter<'a>(&'a self) -> HashSetIterator<'a, T> {
-        HashSetIterator { iterator: self.map.iter() }
+    pub fn new() -> HashSet<T> {
+        HashSet { map: HashMap::new() }
     }
-}    
-
-impl<T> Container for HashSet<T> {
-    #[inline]
-    fn len(&self) -> uint { self.map.len() }
-}
-
-impl<T> Mutable for HashSet<T> {
-    #[inline]
-    fn clear(&mut self) { self.map.clear() }
-}
-
-impl<T : Eq + IterBytes> Set<T> for HashSet<T> {
-    #[inline]
-    fn contains(&self, elt : &T) -> bool { self.map.contains_key(elt) }
 
     #[inline]
-    fn is_disjoint(&self, other : &HashSet<T>) -> bool {
+    pub fn insert(&mut self, v: T) -> bool {
+        match self.map.insert(v, ()) {
+            Some(_) => false,
+            None    => true,
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    #[inline]
+    pub fn iter(&self) -> HashMapKeys<T,()> {
+        self.map.keys()
+    }
+
+    #[inline]
+    pub fn contains<Q>(&self, v: &Q) -> bool where T: Borrow<Q>, Q: Hash + PartialEq<T> {
+        self.map.contains_key(v)
+    }
+
+    #[inline]
+    pub fn is_disjoint(&self, other: &HashSet<T>) -> bool {
         for elt in self.map.table.iter() {
             match *elt {
-                Full(ref k,_,_) => { if other.contains(k) { return false; } },
-                _               => { },
+                Entry::Full(ref k,_,_) => { if other.contains(k) { return false; } },
+                _ => { },
             }
         }
         return true;
     }
 
     #[inline]
-    fn is_subset(&self, other : &HashSet<T>) -> bool {
+    pub fn is_subset(&self, other: &HashSet<T>) -> bool {
         for elt in self.map.table.iter() {
             match *elt {
-                Full(ref k,_,_) => { if !other.contains(k) { return false; } },
-                _               => { },
+                Entry::Full(ref k,_,_) => { if !other.contains(k) { return false; } },
+                _ => { },
             }
         }
         return true;
     }
 
     #[inline]
-    fn is_superset(&self, other : &HashSet<T>) -> bool { other.is_subset(self) }
-}
-
-impl<T : Eq + IterBytes> MutableSet<T> for HashSet<T> {
-    #[inline]
-    fn insert(&mut self, value: T)  -> bool { self.map.insert(value,()) }
-
-    #[inline]
-    fn remove(&mut self, value: &T) -> bool { self.map.remove(value) }
-}
-
-pub struct HashSetIterator<'a,T> {
-    priv iterator : HashMapIterator<'a,T,()>,
-}
-
-impl<'a,T> Iterator<&'a T> for HashSetIterator<'a,T> {
-    #[inline]
-    fn next(&mut self) -> Option<&'a T> {
-        for (k,_) in self.iterator {
-            return Some(k);
-        }
-        return None;
-    }
+    pub fn is_superset(&self, other: &HashSet<T>) -> bool { other.is_subset(self) }
 }
 
 /* ----------------------------------------------- */
 
 #[cfg(test)]
 mod tests {
-    extern mod extra;
+    use std::fs::File;
+    use std::io::{BufRead,BufReader};
 
-    use std;
-    use std::io::buffered::BufferedReader;
-    use super::{DJBState,HashMap,HashSet};
+    use super::{HashMap,HashSet};
 
-    fn get_words() -> ~[~str] {
-        let path = std::path::Path::new("/usr/share/dict/words");
-        let mut bufferedFile = BufferedReader::new( std::io::File::open(&path) );
-        bufferedFile.lines().collect()
+    #[allow(dead_code)]         // Used by benchmarking code.
+    fn get_words() -> Vec<String> {
+        let file = File::open("/usr/share/dict/words").expect("cannot read words");
+        let buffered_file = BufReader::new(file);
+        buffered_file.lines().map(|l| l.unwrap()).collect()
     }
 
     #[test]
     fn test_empty() {
-        let m : HashMap<uint,uint> = HashMap::new();
+        let m: HashMap<usize,usize> = HashMap::new();
         assert_eq!(m.len(), 0);
         assert_eq!(m.capacity(), 8);
-        assert_eq!(m.find(&1), None);
+        assert_eq!(m.get(&1), None);
 
         let mut count = 0;
         for (_,_) in m.iter() { count += 1; }
@@ -422,45 +431,40 @@ mod tests {
 
     #[test]
     fn test_one() {
-        let mut m : HashMap<uint,uint> = HashMap::new();
+        let mut m: HashMap<usize,usize> = HashMap::new();
         assert_eq!(m.len(), 0);
-        assert!(m.insert(1,400));
+        assert_eq!(m.insert(1,400), None);
         assert_eq!(m.len(), 1);
         assert_eq!(m.capacity(), 8);
-        match m.find(&1) {
+        match m.get(&1) {
             Some(y) => assert_eq!(*y,400),
-            None => fail!("failure!")
+            None => panic!("panicure!")
         }
-        match m.find_mut(&1) {
+        match m.get_mut(&1) {
             Some(y) => *y = 500,
-            _ => fail!("failed!")
+            _ => panic!("paniced!")
         }
-        match m.find(&1) {
+        match m.get(&1) {
             Some(y) => assert_eq!(*y,500),
-            None => fail!("failure again!")
+            None => panic!("panicure again!")
         }
 
         let mut count = 0;
         for (_,_) in m.iter() { count += 1; }
         assert_eq!(count, 1);
-
-        match m.pop(&1) {
-            Some(y) => assert_eq!(y,500),
-            None => fail!("oh, noes!")
-        }
-        assert_eq!(m.len(), 0);
+        assert_eq!(m.len(), 1);
     }
 
     #[test]
     fn test_eight() {
-        let mut m : HashMap<uint,uint> = HashMap::new();
+        let mut m: HashMap<usize,usize> = HashMap::new();
         let v = [1,3,5,7,9,11,13,15];
         for i in v.iter() {
-            assert!(m.insert(*i,100 * *i));
+            assert_eq!(m.insert(*i,100 * *i), None);
         }
         assert_eq!(m.len(),8);
         assert_eq!(m.capacity(),16);
-        assert!( !m.insert(3, 12000) );
+        assert_eq!(m.insert(3, 12000), Some(300));
 
         let mut count = 0;
         for (_,_) in m.iter() { count += 1; }
@@ -469,7 +473,7 @@ mod tests {
 
     #[test]
     fn test_set_empty() {
-        let s : HashSet<uint> = HashSet::new();
+        let s: HashSet<usize> = HashSet::new();
         assert_eq!(s.len(), 0);
         assert!(!s.contains(&3));
         let mut count = 0;
@@ -479,7 +483,7 @@ mod tests {
 
     #[test]
     fn test_set_nonempty() {
-        let mut s : HashSet<uint> = HashSet::new();
+        let mut s: HashSet<usize> = HashSet::new();
         let v = [1,3,5,7,9,11,13,15];
         for i in v.iter() {
             assert!(s.insert(*i));
@@ -489,58 +493,58 @@ mod tests {
         let mut count = 0;
         for _ in s.iter() { count += 1; }
         assert_eq!(count, 8);
-        let empty : HashSet<uint> = HashSet::new();
+        let empty: HashSet<usize> = HashSet::new();
         assert!( s.is_disjoint(&empty) );
         assert!( empty.is_subset(&s) );
         assert!( s.is_superset(&empty) );
     }
 
-    #[bench]
-    fn hash_bench_siphash(b: &mut extra::test::BenchHarness) {
-        let s = "abcdefghijklmnopqrstuvwxyz";
-        b.iter( || { s.hash(); } );
-    }
+    // #[bench]
+    // fn hash_bench_siphash(b: &mut test::Bencher) {
+    //     let s = "abcdefghijklmnopqrstuvwxyz";
+    //     b.iter( || { s.hash(); } );
+    // }
 
-    #[bench]
-    fn hashmap_bench_stdlib(b: &mut extra::test::BenchHarness) {
-        let list = ["abashed", "acrid", "dachshund's", "hackle", "zigzagging"];
-        b.iter( || {
-            let mut m = std::hashmap::HashMap::new();
-            for w in list.iter() { m.insert(w, 27); }
-        } );
-    }
+    // #[bench]
+    // fn hashmap_bench_stdlib(b: &mut extra::test::BenchHarness) {
+    //     let list = ["abashed", "acrid", "dachshund's", "hackle", "zigzagging"];
+    //     b.iter( || {
+    //         let mut m = std::hashmap::HashMap::new();
+    //         for w in list.iter() { m.insert(w, 27); }
+    //     } );
+    // }
 
-    #[bench]
-    fn hash_bench_djbhash(b: &mut extra::test::BenchHarness) {
-        let s = "abcdefghijklmnopqrstuvwxyz";
-        b.iter( || { DJBState::djbhash(&s); } );
-    }
+    // #[bench]
+    // fn hash_bench_djbhash(b: &mut extra::test::BenchHarness) {
+    //     let s = "abcdefghijklmnopqrstuvwxyz";
+    //     b.iter( || { DJBState::djbhash(&s); } );
+    // }
 
-    #[bench]
-    fn hashmap_bench_fasthashmap(b: &mut extra::test::BenchHarness) {
-        let list = ["abashed", "acrid", "dachshund's", "hackle", "zigzagging"];
-        b.iter( || {
-            let mut m = HashMap::new();
-            for w in list.iter() { m.insert(w, 27); }
-        } );
-    }
+    // #[bench]
+    // fn hashmap_bench_fasthashmap(b: &mut extra::test::BenchHarness) {
+    //     let list = ["abashed", "acrid", "dachshund's", "hackle", "zigzagging"];
+    //     b.iter( || {
+    //         let mut m = HashMap::new();
+    //         for w in list.iter() { m.insert(w, 27); }
+    //     } );
+    // }
 
-    #[bench]
-    fn big_hashmap_bench_fasthashmap(b: &mut extra::test::BenchHarness) {
-        let words = get_words();
-        b.iter( || {
-            let mut m = HashMap::new(); // with_capacity(2 * words.len());
-            for w in words.iter() { m.insert(w, 27); }
-        } );
-    }
+    // #[bench]
+    // fn big_hashmap_bench_fasthashmap(b: &mut extra::test::BenchHarness) {
+    //     let words = get_words();
+    //     b.iter( || {
+    //         let mut m = HashMap::new(); // with_capacity(2 * words.len());
+    //         for w in words.iter() { m.insert(w, 27); }
+    //     } );
+    // }
 
-    #[bench]
-    fn big_hashmap_bench_siphashmap(b: &mut extra::test::BenchHarness) {
-        let words = get_words();
-        b.iter( || {
-            let mut m = std::hashmap::HashMap::new(); // with_capacity(2 * words.len());
-            for w in words.iter() { m.insert(w, 27); }
-        } );
-    }
+    // #[bench]
+    // fn big_hashmap_bench_siphashmap(b: &mut extra::test::BenchHarness) {
+    //     let words = get_words();
+    //     b.iter( || {
+    //         let mut m = std::hashmap::HashMap::new(); // with_capacity(2 * words.len());
+    //         for w in words.iter() { m.insert(w, 27); }
+    //     } );
+    // }
 
 }
