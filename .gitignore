@@ -1,4 +1,3 @@
-build
-.rust
-*.so
-src/fashhashmap/lib
+target
+Cargo.lock
+*~
